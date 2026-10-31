@@ -1,0 +1,25 @@
+# Runtime data, uploaded photos, local database, logs, and model cache
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.log
+uploads/
+hub/
+
+# Python generated files and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Local dependency installs and editor/OS files
+vendor/
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
