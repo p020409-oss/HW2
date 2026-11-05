@@ -27,7 +27,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
-            type=sha,prefix=sha-
+            type=sha,format=long,prefix=sha-
 
       - name: Log in to Docker Hub
         if: github.event_name != 'pull_request'
