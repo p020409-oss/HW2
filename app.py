@@ -4,47 +4,64 @@ from pathlib import Path
 
 os.environ.setdefault("TORCH_HOME", str(Path(__file__).resolve().parent / "data" / "torch"))
 import torch
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
-from torchvision.models import ResNet50_Weights, resnet50
+from transformers import AutoImageProcessor, AutoModelForImageClassification
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 UPLOADS = DATA / "uploads"
 DB = DATA / "meals.sqlite3"
 MAX_BYTES = 8 * 1024 * 1024
-DISCLAIMER = "추정치이며 의학적 조언이 아닙니다."
+DATA.mkdir(exist_ok=True)
+DISCLAIMER = "\ucd94\uc815\uce58\uc774\uba70 \uc758\ud559\uc801 \uc870\uc5b8\uc774 \uc544\ub2d9\ub2c8\ub2e4."
 logging.basicConfig(filename=DATA / "app.log", level=logging.INFO, encoding="utf-8", format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("mealapp")
 DATA.mkdir(exist_ok=True); UPLOADS.mkdir(exist_ok=True)
 
 # USDA FoodData Central reference values, converted to typical portions; editable estimates.
 FOODS = {
- "비빔밥": {"kcal": 560, "carbs": 86, "protein": 17, "fat": 15, "portion": "1그릇 450g", "source": "USDA FoodData Central: rice, cooked; vegetables, mixed; egg; sesame oil (조합 추정)"},
- "김치찌개": {"kcal": 290, "carbs": 15, "protein": 23, "fat": 15, "portion": "1인분 400g", "source": "USDA FoodData Central: pork, cooked; kimchi/vegetables (조합 추정)"},
- "불고기": {"kcal": 390, "carbs": 24, "protein": 30, "fat": 19, "portion": "1인분 200g", "source": "USDA FoodData Central: beef, cooked; soy sauce/sugar (조합 추정)"},
- "김밥": {"kcal": 480, "carbs": 72, "protein": 14, "fat": 15, "portion": "1줄 250g", "source": "USDA FoodData Central: rice, cooked; egg; vegetables; seaweed (조합 추정)"},
- "된장찌개": {"kcal": 220, "carbs": 18, "protein": 16, "fat": 10, "portion": "1인분 400g", "source": "USDA FoodData Central: tofu; soybean paste/vegetables (조합 추정)"},
- "삼겹살": {"kcal": 590, "carbs": 2, "protein": 28, "fat": 52, "portion": "구운 고기 150g", "source": "USDA FoodData Central: pork belly, cooked (조리/부위 편차 있음)"},
- "잡채": {"kcal": 300, "carbs": 43, "protein": 7, "fat": 11, "portion": "1접시 200g", "source": "USDA FoodData Central: sweet potato noodles; vegetables; oil (조합 추정)"},
- "떡볶이": {"kcal": 430, "carbs": 90, "protein": 8, "fat": 5, "portion": "1인분 300g", "source": "USDA FoodData Central: rice cake; chili sauce ingredients (조합 추정)"},
- "갈비탕": {"kcal": 490, "carbs": 40, "protein": 32, "fat": 21, "portion": "1그릇 650g", "source": "USDA FoodData Central: beef; rice; broth components (조합 추정)"},
- "김치볶음밥": {"kcal": 520, "carbs": 78, "protein": 15, "fat": 16, "portion": "1접시 400g", "source": "USDA FoodData Central: rice, cooked; kimchi; egg; oil (조합 추정)"},
+    "비빔밥": {"kcal": 560, "carbs": 86, "protein": 17, "fat": 15, "portion": "1그릇 450g", "source": "USDA FoodData Central 재료값 조합 추정: 밥, 채소, 달걀, 참기름"},
+    "김치찌개": {"kcal": 290, "carbs": 15, "protein": 23, "fat": 15, "portion": "1인분 400g", "source": "USDA FoodData Central 재료값 조합 추정: 돼지고기, 김치, 채소"},
+    "불고기": {"kcal": 390, "carbs": 24, "protein": 30, "fat": 19, "portion": "1인분 200g", "source": "USDA FoodData Central 재료값 조합 추정: 소고기, 간장, 설탕"},
+    "김밥": {"kcal": 480, "carbs": 72, "protein": 14, "fat": 15, "portion": "1줄 250g", "source": "USDA FoodData Central 재료값 조합 추정: 밥, 달걀, 채소, 김"},
+    "된장찌개": {"kcal": 220, "carbs": 18, "protein": 16, "fat": 10, "portion": "1인분 400g", "source": "USDA FoodData Central 재료값 조합 추정: 두부, 된장, 채소"},
+    "삼겹살": {"kcal": 590, "carbs": 2, "protein": 28, "fat": 52, "portion": "구운 고기 150g", "source": "USDA FoodData Central 참고값: 조리한 돼지고기"},
+    "잡채": {"kcal": 300, "carbs": 43, "protein": 7, "fat": 11, "portion": "1접시 200g", "source": "USDA FoodData Central 재료값 조합 추정: 당면, 채소, 기름"},
+    "떡볶이": {"kcal": 430, "carbs": 90, "protein": 8, "fat": 5, "portion": "1인분 300g", "source": "USDA FoodData Central 재료값 조합 추정: 떡, 양념 재료"},
+    "갈비탕": {"kcal": 490, "carbs": 40, "protein": 32, "fat": 21, "portion": "1그릇 650g", "source": "USDA FoodData Central 재료값 조합 추정: 소고기, 밥, 국물 재료"},
+    "김치볶음밥": {"kcal": 520, "carbs": 78, "protein": 15, "fat": 16, "portion": "1접시 400g", "source": "USDA FoodData Central 재료값 조합 추정: 밥, 김치, 달걀, 기름"},
 }
+MODEL_ID = "rajistics/finetuned-indian-food"
+MODEL_REVISION = "27e01953a3945806138ab2452d0ca5ada4412628"
+MODEL_VERSION = f"{MODEL_ID}@{MODEL_REVISION[:12]}"
 torch.set_num_threads(2)
-model = None; preprocess = None; categories = None; model_error = None
+model = None
+processor = None
+model_error = None
 try:
-    weights = ResNet50_Weights.DEFAULT
-    model = resnet50(weights=weights).eval()
-    preprocess = weights.transforms(); categories = weights.meta["categories"]
-    log.info("Loaded torchvision ResNet50 ImageNet pretrained weights on CPU")
+    processor = AutoImageProcessor.from_pretrained(MODEL_ID, revision=MODEL_REVISION, use_fast=False)
+    model = AutoModelForImageClassification.from_pretrained(MODEL_ID, revision=MODEL_REVISION).eval()
+    log.info("Loaded CPU image classifier %s", MODEL_VERSION)
 except Exception as e:
-    model_error = str(e); log.exception("Could not load pretrained weights")
+    model_error = str(e)
+    log.exception("Could not load pretrained food model")
 
 app = FastAPI(title="한끼로그", docs_url="/docs", redoc_url=None)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+
+@app.middleware("http")
+async def attach_version_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-App-Version"] = os.environ.get("APP_VERSION", "local")
+    response.headers["X-Model-Version"] = MODEL_VERSION
+    return response
+
+@app.get("/api/version")
+def version():
+    return {"app_version": os.environ.get("APP_VERSION", "local"), "model_version": MODEL_VERSION, "model_loaded": model is not None}
 
 def connect():
     c = sqlite3.connect(DB); c.row_factory = sqlite3.Row; return c
@@ -52,19 +69,37 @@ with connect() as c:
     c.execute("CREATE TABLE IF NOT EXISTS meals(id TEXT PRIMARY KEY, eaten_at TEXT NOT NULL, menu TEXT NOT NULL, kcal REAL NOT NULL, carbs REAL NOT NULL, protein REAL NOT NULL, fat REAL NOT NULL, image TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
     c.execute("CREATE TABLE IF NOT EXISTS goals(day TEXT PRIMARY KEY, kcal REAL NOT NULL, carbs REAL NOT NULL, protein REAL NOT NULL, fat REAL NOT NULL)")
 
+# Visual analogy map from Indian-food classes to the closest item in the Korean menu list.
+# These are approximate appearance-based suggestions, not Korean-food recognition.
+VISUAL_MENU_MAP = {
+    "burger": "\uae40\ubc25", "butter_naan": "\ubd88\uace0\uae30", "kaathi_rolls": "\uae40\ubc25",
+    "kadai_paneer": "\ubd88\uace0\uae30", "kulfi": "\ubd88\uace0\uae30", "masala_dosa": "\uae40\ubc25",
+    "momos": "\uae40\ubc25", "paani_puri": "\ub5a1\ubcf6\uc774", "pakode": "\uc0bc\uacb9\uc0b4",
+    "pav_bhaji": "\ube44\ube54\ubc25", "pizza": "\uae40\ubc25", "samosa": "\uae40\ubc25",
+    "chai": "\uae40\uce58\ucc0c\uac1c", "chapati": "\ubd88\uace0\uae30", "chole_bhature": "\uae40\uce58\ucc0c\uac1c",
+    "dal_makhani": "\ub41c\uc7a5\ucc0c\uac1c",
+    "dhokla": "\ub5a1\ubcf6\uc774", "fried_rice": "\uae40\uce58\ubcf6\uc74c\ubc25", "idli": "\ub5a1\ubcf6\uc774",
+    "jalebi": "\ub5a1\ubcf6\uc774",
+}
+
 def classify(image):
-    if model is None: return [{"menu": "비빔밥", "confidence": 0.0}], "모델 가중치를 불러오지 못해 기본 제안을 표시합니다."
+    if model is None or processor is None:
+        raise RuntimeError("사전학습 음식 모델을 불러오지 못했습니다.")
+    inputs = processor(images=image, return_tensors="pt")
     with torch.inference_mode():
-        p = model(preprocess(image).unsqueeze(0))[0].softmax(0)
-    top = p.topk(5)
-    labels = [categories[i].lower() for i in top.indices.tolist()]
-    # Food- and ingredient-related ImageNet labels produce weak hints; user confirms the Korean dish.
-    hints = []
-    for label in labels:
-        if any(k in label for k in ("rice", "meat", "beef", "pork", "soup", "vegetable", "broccoli", "cauliflower", "meatloaf", "potpie")):
-            hints.extend(["비빔밥", "김치찌개", "불고기"])
-    picks = list(dict.fromkeys(hints + list(FOODS)))[:3]
-    return [{"menu": m, "confidence": round(float(top.values[0]) * 100, 1) if i == 0 else 0} for i, m in enumerate(picks)], "ImageNet 범용 분류 결과를 참고한 제안입니다. 한식 메뉴 인식 전용 모델이 아니므로 메뉴를 확인해 주세요."
+        probs = model(**inputs).logits[0].softmax(0)
+    scores = {}
+    for index, probability in enumerate(probs.tolist()):
+        label = str(model.config.id2label.get(str(index), model.config.id2label.get(index, ""))).lower()
+        menu = VISUAL_MENU_MAP.get(label)
+        if menu in FOODS:
+            scores[menu] = scores.get(menu, 0.0) + probability
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)[:3]
+    if not ranked:
+        ranked = [("비빔밥", 0.0)]
+    choices = [{"menu": menu, "similarity_score": round(score * 100, 1)} for menu, score in ranked]
+    note = f"{MODEL_VERSION}의 음식 분류 점수를 한식 메뉴에 대응한 시각적 유사 후보입니다. 점수는 실제 한식 인식 확률이 아니므로 메뉴를 확인하거나 수정해 주세요."
+    return choices, note
 
 @app.get("/")
 def home(): return FileResponse(ROOT / "static" / "index.html")
@@ -73,7 +108,7 @@ def home(): return FileResponse(ROOT / "static" / "index.html")
 def foods(): return {"foods": [{"name": k, **v} for k,v in FOODS.items()], "disclaimer": DISCLAIMER}
 
 @app.post("/api/analyze")
-async def analyze(file: UploadFile = File(...)):
+async def analyze(request: Request, file: UploadFile = File(...)):
     if file.content_type not in ("image/jpeg", "image/png", "image/webp"):
         raise HTTPException(415, "JPG, PNG, WEBP 이미지 파일만 올려 주세요.")
     raw = await file.read(MAX_BYTES + 1)
@@ -82,10 +117,14 @@ async def analyze(file: UploadFile = File(...)):
         im = Image.open(io.BytesIO(raw)); im.verify(); im = Image.open(io.BytesIO(raw)).convert("RGB")
         if im.width * im.height > 20_000_000: raise HTTPException(413, "이미지 해상도가 너무 큽니다.")
     except (UnidentifiedImageError, OSError): raise HTTPException(400, "읽을 수 있는 이미지가 아닙니다.")
-    uid = uuid.uuid4().hex + ".jpg"
-    im.thumbnail((1400,1400)); im.save(UPLOADS / uid, "JPEG", quality=88)
+    im.thumbnail((1400,1400))
     choices, note = classify(im)
-    return {"image": "/api/images/" + uid, "choices": choices, "note": note, "disclaimer": DISCLAIMER}
+    image_path = None
+    if request.headers.get("x-deployment-monitor") != "1":
+        uid = uuid.uuid4().hex + ".jpg"
+        im.save(UPLOADS / uid, "JPEG", quality=88)
+        image_path = "/api/images/" + uid
+    return {"image": image_path, "choices": choices, "note": note, "disclaimer": DISCLAIMER}
 
 @app.get("/api/images/{name}")
 def image_file(name: str):

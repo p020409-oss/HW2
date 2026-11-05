@@ -6,6 +6,7 @@ env
 vendor
 upload
 data
+eval_artifacts/
 __pycache__
 *.py[cod]
 *.db

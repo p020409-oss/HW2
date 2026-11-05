@@ -2,7 +2,8 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TORCH_HOME=/opt/torch
+    TORCH_HOME=/opt/torch \
+    HF_HOME=/opt/huggingface
 
 WORKDIR /app
 
@@ -15,12 +16,14 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 COPY app.py ./app.py
 COPY static ./static
 
-# Download the pinned pretrained weights during build and verify a real CPU inference.
-RUN python -c "from PIL import Image; import torch; from torchvision.models import ResNet50_Weights, resnet50; torch.set_num_threads(2); weights=ResNet50_Weights.DEFAULT; model=resnet50(weights=weights).eval(); image=weights.transforms()(Image.new('RGB',(224,224))).unsqueeze(0); output=model(image); assert tuple(output.shape)==(1,1000) and torch.isfinite(output).all().item(); print('CPU ResNet50 inference verified:', tuple(output.shape))"
+# Download the pinned Apache-2.0 model during build and verify a real CPU inference.
+RUN python -c "import torch; from PIL import Image; from transformers import AutoImageProcessor, AutoModelForImageClassification; repo='rajistics/finetuned-indian-food'; rev='27e01953a3945806138ab2452d0ca5ada4412628'; torch.set_num_threads(2); processor=AutoImageProcessor.from_pretrained(repo,revision=rev,use_fast=False); model=AutoModelForImageClassification.from_pretrained(repo,revision=rev).eval(); inputs=processor(images=Image.new('RGB',(224,224)),return_tensors='pt'); output=model(**inputs).logits; assert tuple(output.shape)==(1,20) and torch.isfinite(output).all().item(); print('CPU model inference verified:',tuple(output.shape),rev)"
 
 RUN mkdir -p /app/data \
+    /opt/torch \
+    /opt/huggingface \
     && chown app:app /app/data \
-    && chmod -R a+rX /opt/torch
+    && chmod -R a+rX /opt/torch /opt/huggingface
 
 USER app
 

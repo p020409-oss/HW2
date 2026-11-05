@@ -17,84 +17,52 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
     runs-on: [self-hosted, Windows, X64]
     steps:
+      - name: Initialize verification artifact
+        shell: powershell
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'meal-deploy-observation'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText((Join-Path $dir 'summary.md'), '# Zero-Downtime Redeployment Verification' + "`n`nDeployment did not reach the monitoring step; inspect the earlier job step for the failure." + "`n", $utf8)
+
+      - name: Check out the image source revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Pull, replace, and verify the local container
+      - name: Monitor, canary, deploy, and summarize
+        id: deploy
         shell: powershell
         env:
           IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/meal-app
+          IMAGE_TAG: sha-${{ github.event.workflow_run.head_sha }}
+          APP_VERSION: ${{ github.event.workflow_run.head_sha }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $containerName = 'meal-app'
-          $volumeName = 'meal-data'
-          $image = "$env:IMAGE_NAME`:latest"
+          & "$env:GITHUB_WORKSPACE\.github\workflows\deploy.ps1"
 
-          docker pull $image
-          if ($LASTEXITCODE -ne 0) { throw "Could not pull $image" }
-
-          docker volume create $volumeName | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Could not create Docker volume $volumeName" }
-
-          $oldImageId = $null
-          $existingContainerId = docker container ls --all --quiet --filter "name=^/$containerName`$"
-          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect local Docker containers.' }
-          if ($existingContainerId) {
-            $oldImageId = docker inspect --format '{{.Image}}' $existingContainerId
-            if ($LASTEXITCODE -ne 0 -or -not $oldImageId) { throw "Could not inspect existing container $containerName" }
-            $oldImageId = $oldImageId.Trim()
+      - name: Publish verification summary
+        if: always()
+        shell: powershell
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP 'meal-deploy-observation\summary.md'
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          if (Test-Path $path) {
+            [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) + "`n", $utf8)
+          } else {
+            [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, '# Zero-Downtime Redeployment Verification' + "`n`nNo report file was produced; inspect the job logs." + "`n", $utf8)
           }
 
-          try {
-            if ($oldImageId) {
-              docker stop $containerName | Out-Null
-              if ($LASTEXITCODE -ne 0) { throw "Could not stop existing container $containerName" }
-              docker rm $containerName | Out-Null
-              if ($LASTEXITCODE -ne 0) { throw "Could not remove existing container $containerName" }
-            }
-
-            docker run --detach --name $containerName --restart unless-stopped --publish 127.0.0.1:8765:8765 --volume "${volumeName}:/app/data" $image
-            if ($LASTEXITCODE -ne 0) { throw "Could not start container $containerName" }
-
-            $healthy = $false
-            for ($attempt = 1; $attempt -le 30; $attempt++) {
-              try {
-                $response = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/foods' -TimeoutSec 3
-                if ($response.foods.Count -gt 0) {
-                  $healthy = $true
-                  break
-                }
-              } catch {
-                Start-Sleep -Seconds 2
-              }
-            }
-
-            if (-not $healthy) {
-              docker logs $containerName
-              throw 'The deployed service did not return foods from /api/foods within 60 seconds.'
-            }
-
-            Write-Host "Deployment healthy: $image at http://127.0.0.1:8765"
-          } catch {
-            $deployError = $_
-            $failedContainerId = docker container ls --all --quiet --filter "name=^/$containerName`$"
-            if ($LASTEXITCODE -ne 0) { throw "Deployment failed and could not inspect containers for cleanup. Original error: $deployError" }
-            if ($failedContainerId) {
-              docker logs $failedContainerId 2>&1 | ForEach-Object { Write-Host $_ }
-              docker rm --force $failedContainerId | Out-Null
-              if ($LASTEXITCODE -ne 0) { throw "Deployment failed and could not remove failed container $containerName. Original error: $deployError" }
-            }
-
-            if ($oldImageId) {
-              docker run --detach --name $containerName --restart unless-stopped --publish 127.0.0.1:8765:8765 --volume "${volumeName}:/app/data" $oldImageId
-              if ($LASTEXITCODE -ne 0) {
-                throw "Deployment failed and rollback could not start the previous image $oldImageId. Original error: $deployError"
-              }
-              Write-Warning "Deployment failed; restarted the previous image $oldImageId."
-            }
-
-            throw $deployError
-          }
+      - name: Upload UTF-8 request log and summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meal-deploy-verification-${{ github.event.workflow_run.head_sha }}
+          path: ${{ runner.temp }}/meal-deploy-observation
+          if-no-files-found: warn
+          retention-days: 30

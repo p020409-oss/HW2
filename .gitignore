@@ -34,3 +34,4 @@ _diag/
 .credentials
 .credentials_rsaparams
 actions-runner-*.zip
+eval_artifacts/

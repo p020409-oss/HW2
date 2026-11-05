@@ -1,6 +1,6 @@
 # 한끼로그
 
-사진으로 한식 메뉴를 추정하고 식단을 기록해 일별·주별 섭취량을 목표와 비교하는 로컬 웹앱입니다. FastAPI와 SQLite를 백엔드로, HTML/CSS/JavaScript를 화면으로 사용합니다. 사진 분석은 CPU에서 실행되는 사전학습 torchvision ResNet50(ImageNet)으로 동작합니다. ImageNet은 한식 전용 분류 모델이 아니므로 메뉴 제안을 확인하고 필요하면 수정해 주세요.
+사진으로 비슷한 한식 메뉴를 추정하고 식단을 기록해 일별·주별 섭취량을 목표와 비교하는 로컬 웹앱입니다. FastAPI와 SQLite를 백엔드로, HTML/CSS/JavaScript를 화면으로 사용합니다. 사진 분석은 CPU에서 실행되는 Apache-2.0 라이선스 사전학습 음식 분류 모델을 사용하고, 분류된 음식 유형을 한식 메뉴 후보로 연결합니다. 후보는 시각적 유사 추정이며 실제 한식 인식 결과가 아니므로 확인하고 필요하면 수정해 주세요.
 
 메뉴 영양값은 USDA FoodData Central의 식재료 참조값을 일반적인 1회 분량으로 조합한 데모 추정치입니다. 각 결과는 추정치이며 의학적 조언이 아닙니다.
 
@@ -21,11 +21,11 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-PyTorch 설치가 플랫폼에 맞지 않거나 CPU 전용 설치를 명시하려면 [PyTorch 공식 설치 안내](https://pytorch.org/get-started/locally/)에서 Windows, Pip, Python, CPU를 선택해 안내된 명령으로 `torch`와 `torchvision`을 설치한 다음 나머지 패키지를 설치하세요.
+`requirements.txt`에는 CPU 전용 PyTorch, torchvision 및 고정 버전 Transformers가 포함되어 있습니다. 설치 문제가 있으면 [PyTorch 공식 설치 안내](https://pytorch.org/get-started/locally/)에서 Windows, Pip, Python, CPU 설정을 확인하세요.
 
 ## 모델 준비
 
-첫 서버 실행 때 torchvision이 사전학습 ResNet50 ImageNet 가중치(약 98MB)를 공식 PyTorch 모델 저장소에서 자동으로 내려받습니다. 앱은 이를 `data/torch` 아래에 보관하고 다음 실행부터 재사용합니다. 최초 실행에는 인터넷 연결과 해당 폴더의 쓰기 권한이 필요합니다. 모델 파일은 저장소에 포함하지 않습니다.
+고정 모델 `rajistics/finetuned-indian-food` (`27e01953a394`)를 사용합니다. Hugging Face 모델 카드에는 Apache-2.0 라이선스가 표시되어 있습니다. Windows에서 첫 실행할 때는 모델 가중치를 내려받을 인터넷 연결이 필요하며 캐시는 `data/torch`가 아닌 Hugging Face 기본 캐시 아래에 저장됩니다. Docker 이미지는 빌드 중 모델 가중치를 받아 CPU 추론을 확인하므로 컨테이너 실행 시 별도 다운로드가 없습니다. 모델 파일은 Git에 넣지 않습니다.
 
 ## 실행
 
@@ -42,7 +42,7 @@ python -m uvicorn app:app --host 127.0.0.1 --port 8765 --log-level info
 
 ## Docker로 실행
 
-Docker Desktop을 설치하고 실행한 뒤 저장소 루트에서 이미지를 빌드합니다. Dockerfile 빌드 단계가 CPU PyTorch를 설치하고 ResNet50 가중치를 준비한 뒤, CPU 추론이 1,000개 ImageNet 클래스를 반환하는지 확인합니다.
+Docker Desktop을 설치하고 실행한 뒤 저장소 루트에서 이미지를 빌드합니다. Dockerfile은 고정 모델과 입력 전처리를 준비하고, 무작위 이미지에 대한 CPU 추론 출력 형태와 유한값을 확인합니다.
 
 ```powershell
 docker build -t meal-app:local .
@@ -55,4 +55,4 @@ docker run --rm -p 8765:8765 -v meal-data:/app/data meal-app:local
 
 `.github/workflows/ci.yml`은 push 및 pull request에서 Docker 이미지를 빌드합니다. Push 이벤트에서는 Docker Hub의 `DOCKERHUB_USERNAME/meal-app`에 `latest`(기본 브랜치), 브랜치명, 커밋 SHA 태그로 업로드합니다. GitHub 저장소의 **Settings → Secrets and variables → Actions**에 `DOCKERHUB_USERNAME`과 `DOCKERHUB_TOKEN`을 등록하고, Docker Hub에 `meal-app` 저장소를 준비하세요. 토큰은 읽기/쓰기 권한만 부여한 Docker Hub access token을 사용합니다. PR 빌드는 Secrets 없이 이미지만 빌드하고 업로드하지 않습니다.
 
-`.github/workflows/deploy.yml`은 `main` 브랜치의 push로 시작된 이미지 게시 workflow가 성공한 뒤 Windows self-hosted runner에서 `latest`를 받아 로컬 컨테이너를 교체합니다. Runner에는 `self-hosted`, `Windows`, `X64` labels와 실행 중인 Docker Desktop Linux engine이 필요합니다. 서비스는 `http://127.0.0.1:8765`에서만 열리고 `meal-data` Docker volume에 식단 데이터가 유지됩니다. 배포 직후 `/api/foods` 응답을 확인하며, 새 컨테이너가 응답하지 않으면 이전 이미지로 복구를 시도합니다.
+`.github/workflows/deploy.yml`은 이미지 게시가 성공하면 해당 커밋의 불변 SHA 태그를 Windows self-hosted runner에 배포합니다. 독립 모니터가 고정 CC0 음식 이미지로 기존 서비스 응답을 확인한 후 canary를 시험하고, 배포 전·중·후 `/api/analyze` 응답을 기록합니다. 서비스는 `http://127.0.0.1:8765`에서 유지되고 `meal-data` Docker volume에 식단 데이터가 보존됩니다. Summary에는 응답 성공/실패, 시간 간격, 최대 기록 공백과 버전이 표시되며 전체 UTF-8 요청 로그는 Artifact로 남습니다. 샘플링 기록의 공백은 가용성이 확인되지 않은 구간입니다.
