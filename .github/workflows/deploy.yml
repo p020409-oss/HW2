@@ -40,9 +40,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Could not create Docker volume $volumeName" }
 
           $oldImageId = $null
-          $existingImage = docker inspect --format '{{.Image}}' $containerName 2>$null
-          if ($LASTEXITCODE -eq 0 -and $existingImage) {
-            $oldImageId = $existingImage.Trim()
+          $existingContainerId = docker container ls --all --quiet --filter "name=^/$containerName`$"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect local Docker containers.' }
+          if ($existingContainerId) {
+            $oldImageId = docker inspect --format '{{.Image}}' $existingContainerId
+            if ($LASTEXITCODE -ne 0 -or -not $oldImageId) { throw "Could not inspect existing container $containerName" }
+            $oldImageId = $oldImageId.Trim()
           }
 
           try {
@@ -77,9 +80,13 @@ jobs:
             Write-Host "Deployment healthy: $image at http://127.0.0.1:8765"
           } catch {
             $deployError = $_
-            docker logs $containerName 2>$null
-            docker stop $containerName 2>$null | Out-Null
-            docker rm $containerName 2>$null | Out-Null
+            $failedContainerId = docker container ls --all --quiet --filter "name=^/$containerName`$"
+            if ($LASTEXITCODE -ne 0) { throw "Deployment failed and could not inspect containers for cleanup. Original error: $deployError" }
+            if ($failedContainerId) {
+              docker logs $failedContainerId 2>&1 | ForEach-Object { Write-Host $_ }
+              docker rm --force $failedContainerId | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "Deployment failed and could not remove failed container $containerName. Original error: $deployError" }
+            }
 
             if ($oldImageId) {
               docker run --detach --name $containerName --restart unless-stopped --publish 127.0.0.1:8765:8765 --volume "${volumeName}:/app/data" $oldImageId
