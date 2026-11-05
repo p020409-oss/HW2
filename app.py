@@ -43,7 +43,7 @@ try:
 except Exception as e:
     model_error = str(e); log.exception("Could not load pretrained weights")
 
-app = FastAPI(title="한끼로그", docs_url=None, redoc_url=None)
+app = FastAPI(title="한끼로그", docs_url="/docs", redoc_url=None)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 def connect():
