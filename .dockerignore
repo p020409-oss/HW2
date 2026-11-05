@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+venv
+env
+vendor
+upload
+data
+__pycache__
+*.py[cod]
+*.db
+*.sqlite
+*.sqlite3
+*.log
+.env
+.env.*
+!.env.example

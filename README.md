@@ -39,3 +39,18 @@ python -m uvicorn app:app --host 127.0.0.1 --port 8765 --log-level info
 ## 로컬 데이터와 업로드
 
 실행 중 생성되는 SQLite DB, 업로드 이미지, 로그, 모델 캐시는 `data/` 아래에 생성됩니다. 이 폴더는 Git에 올리지 않도록 `.gitignore`에 등록되어 있습니다. 이미지 업로드는 JPEG/PNG/WEBP, 최대 8MB 및 2천만 픽셀로 제한합니다.
+
+## Docker로 실행
+
+Docker Desktop을 설치하고 실행한 뒤 저장소 루트에서 이미지를 빌드합니다. Dockerfile 빌드 단계가 CPU PyTorch를 설치하고 ResNet50 가중치를 준비한 뒤, CPU 추론이 1,000개 ImageNet 클래스를 반환하는지 확인합니다.
+
+```powershell
+docker build -t meal-app:local .
+docker run --rm -p 8765:8765 -v meal-data:/app/data meal-app:local
+```
+
+브라우저에서 <http://localhost:8765>를 여세요. `meal-data` 볼륨에는 SQLite 기록과 업로드 파일이 저장됩니다. 모델 가중치는 이미지에 포함되므로 컨테이너 첫 시작 시 별도 다운로드가 없습니다.
+
+## GitHub Actions와 Docker Hub
+
+`.github/workflows/ci.yml`은 push 및 pull request에서 Docker 이미지를 빌드합니다. Push 이벤트에서는 Docker Hub의 `DOCKERHUB_USERNAME/meal-app`에 `latest`(기본 브랜치), 브랜치명, 커밋 SHA 태그로 업로드합니다. GitHub 저장소의 **Settings → Secrets and variables → Actions**에 `DOCKERHUB_USERNAME`과 `DOCKERHUB_TOKEN`을 등록하고, Docker Hub에 `meal-app` 저장소를 준비하세요. 토큰은 읽기/쓰기 권한만 부여한 Docker Hub access token을 사용합니다. PR 빌드는 Secrets 없이 이미지만 빌드하고 업로드하지 않습니다.
