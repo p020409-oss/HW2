@@ -23,3 +23,14 @@ vendor/
 Thumbs.db
 .vscode/
 .idea/
+
+# GitHub Actions self-hosted runner install and generated state
+actions-runner/
+**/actions-runner/
+_work/
+_diag/
+.runner
+.runner_migrated
+.credentials
+.credentials_rsaparams
+actions-runner-*.zip

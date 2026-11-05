@@ -54,3 +54,5 @@ docker run --rm -p 8765:8765 -v meal-data:/app/data meal-app:local
 ## GitHub Actions와 Docker Hub
 
 `.github/workflows/ci.yml`은 push 및 pull request에서 Docker 이미지를 빌드합니다. Push 이벤트에서는 Docker Hub의 `DOCKERHUB_USERNAME/meal-app`에 `latest`(기본 브랜치), 브랜치명, 커밋 SHA 태그로 업로드합니다. GitHub 저장소의 **Settings → Secrets and variables → Actions**에 `DOCKERHUB_USERNAME`과 `DOCKERHUB_TOKEN`을 등록하고, Docker Hub에 `meal-app` 저장소를 준비하세요. 토큰은 읽기/쓰기 권한만 부여한 Docker Hub access token을 사용합니다. PR 빌드는 Secrets 없이 이미지만 빌드하고 업로드하지 않습니다.
+
+`.github/workflows/deploy.yml`은 `main` 브랜치의 push로 시작된 이미지 게시 workflow가 성공한 뒤 Windows self-hosted runner에서 `latest`를 받아 로컬 컨테이너를 교체합니다. Runner에는 `self-hosted`, `Windows`, `X64` labels와 실행 중인 Docker Desktop Linux engine이 필요합니다. 서비스는 `http://127.0.0.1:8765`에서만 열리고 `meal-data` Docker volume에 식단 데이터가 유지됩니다. 배포 직후 `/api/foods` 응답을 확인하며, 새 컨테이너가 응답하지 않으면 이전 이미지로 복구를 시도합니다.

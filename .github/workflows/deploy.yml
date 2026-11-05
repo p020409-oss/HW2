@@ -1,0 +1,93 @@
+name: Deploy published image to local runner
+
+on:
+  workflow_run:
+    workflows:
+      - Build and publish Docker image
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull, replace, and verify the local container
+        shell: powershell
+        env:
+          IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/meal-app
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $containerName = 'meal-app'
+          $volumeName = 'meal-data'
+          $image = "$env:IMAGE_NAME`:latest"
+
+          docker pull $image
+          if ($LASTEXITCODE -ne 0) { throw "Could not pull $image" }
+
+          docker volume create $volumeName | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Could not create Docker volume $volumeName" }
+
+          $oldImageId = $null
+          $existingImage = docker inspect --format '{{.Image}}' $containerName 2>$null
+          if ($LASTEXITCODE -eq 0 -and $existingImage) {
+            $oldImageId = $existingImage.Trim()
+          }
+
+          try {
+            if ($oldImageId) {
+              docker stop $containerName | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "Could not stop existing container $containerName" }
+              docker rm $containerName | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "Could not remove existing container $containerName" }
+            }
+
+            docker run --detach --name $containerName --restart unless-stopped --publish 127.0.0.1:8765:8765 --volume "${volumeName}:/app/data" $image
+            if ($LASTEXITCODE -ne 0) { throw "Could not start container $containerName" }
+
+            $healthy = $false
+            for ($attempt = 1; $attempt -le 30; $attempt++) {
+              try {
+                $response = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/api/foods' -TimeoutSec 3
+                if ($response.foods.Count -gt 0) {
+                  $healthy = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Seconds 2
+              }
+            }
+
+            if (-not $healthy) {
+              docker logs $containerName
+              throw 'The deployed service did not return foods from /api/foods within 60 seconds.'
+            }
+
+            Write-Host "Deployment healthy: $image at http://127.0.0.1:8765"
+          } catch {
+            $deployError = $_
+            docker logs $containerName 2>$null
+            docker stop $containerName 2>$null | Out-Null
+            docker rm $containerName 2>$null | Out-Null
+
+            if ($oldImageId) {
+              docker run --detach --name $containerName --restart unless-stopped --publish 127.0.0.1:8765:8765 --volume "${volumeName}:/app/data" $oldImageId
+              if ($LASTEXITCODE -ne 0) {
+                throw "Deployment failed and rollback could not start the previous image $oldImageId. Original error: $deployError"
+              }
+              Write-Warning "Deployment failed; restarted the previous image $oldImageId."
+            }
+
+            throw $deployError
+          }
